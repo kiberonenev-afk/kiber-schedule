@@ -166,7 +166,7 @@ else:
     st.success("Ура! Программа для этой группы завершена.")
     st.dataframe(group_df[['Дата', 'Название модуля', 'Урок']], use_container_width=True, hide_index=True)
 
-# --- ПАНЕЛЬ АДМИНИСТРАТОРА ---
+## --- ПАНЕЛЬ АДМИНИСТРАТОРА ---
 st.divider()
 st.subheader("⚙️ Панель администратора")
 
@@ -174,16 +174,34 @@ ADMIN_PIN = load_admin_password()
 pin = st.text_input("Введите PIN-код:", type="password")
 
 if pin == ADMIN_PIN:
+
+    # --- СИНХРОНИЗАЦИЯ ВЫБОРА ГРУППЫ МЕЖДУ ВКЛАДКАМИ ---
+    if "admin_sync_group" not in st.session_state:
+        st.session_state.admin_sync_group = "(Показать все)"
+
+    def update_sync(key):
+        # Эта функция копирует выбранную группу в общую память
+        st.session_state.admin_sync_group = st.session_state[key]
+
     tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
         "✏️ Таблица", "➕ Вставить", "⏩ Сдвиг", "👨‍🏫 База и привязки", "✉️ Запрос доступов", "🔑 Смена пароля"
     ])
 
     # ВКЛАДКА 1: Таблица
     with tab1:
-        st.info(
-            "💡 Выберите группу для удобного редактирования. Удаление строки «Каникулы» автоматически сдвинет расписание обратно.")
+        st.info("💡 Выберите группу для удобного редактирования. Удаление строки «Каникулы» автоматически сдвинет расписание обратно.")
 
-        edit_group_filter = st.selectbox("Фильтр по группе:", ["(Показать все)"] + all_groups, key="edit_group_filter")
+        options_1 = ["(Показать все)"] + all_groups
+        idx_1 = options_1.index(st.session_state.admin_sync_group) if st.session_state.admin_sync_group in options_1 else 0
+
+        edit_group_filter = st.selectbox(
+            "Фильтр по группе:",
+            options_1,
+            index=idx_1,
+            key="sync_tab1",
+            on_change=update_sync,
+            args=("sync_tab1",)
+        )
 
         edit_df = df.drop(columns=['Дата_dt']).copy()
         edit_df['Дата'] = pd.to_datetime(edit_df['Дата'], format='%d.%m.%Y', errors='coerce').dt.date
@@ -240,7 +258,16 @@ if pin == ADMIN_PIN:
     # ВКЛАДКА 2: Вставка занятия
     with tab2:
         with st.form("insert_form"):
-            ins_group = st.selectbox("В какую группу добавить?", all_groups)
+            idx_2 = all_groups.index(st.session_state.admin_sync_group) if st.session_state.admin_sync_group in all_groups else 0
+
+            ins_group = st.selectbox(
+                "В какую группу добавить?",
+                all_groups,
+                index=idx_2,
+                key="sync_tab2",
+                on_change=update_sync,
+                args=("sync_tab2",)
+            )
             ins_date = st.date_input("Дата нового занятия", format="DD.MM.YYYY")
             ins_mod = st.text_input("Название модуля")
             ins_les = st.text_input("Номер урока")
@@ -253,14 +280,11 @@ if pin == ADMIN_PIN:
                 temp_df['tmp_dt'] = pd.to_datetime(temp_df['Дата'], format='%d.%m.%Y', errors='coerce')
 
                 if do_shift:
-                    mask = (temp_df['Группа'] == ins_group) & (
-                                temp_df['tmp_dt'] >= pd.to_datetime(date_str, format='%d.%m.%Y'))
+                    mask = (temp_df['Группа'] == ins_group) & (temp_df['tmp_dt'] >= pd.to_datetime(date_str, format='%d.%m.%Y'))
                     temp_df.loc[mask, 'tmp_dt'] += pd.Timedelta(days=7)
                     temp_df.loc[mask, 'Дата'] = temp_df.loc[mask, 'tmp_dt'].dt.strftime('%d.%m.%Y')
 
-                new_row = pd.DataFrame(
-                    [{'Группа': ins_group, 'Дата': date_str, 'Название модуля': ins_mod, 'Урок': ins_les,
-                      'Запрос_отправлен': ''}])
+                new_row = pd.DataFrame([{'Группа': ins_group, 'Дата': date_str, 'Название модуля': ins_mod, 'Урок': ins_les, 'Запрос_отправлен': ''}])
                 temp_df = temp_df.drop(columns=['tmp_dt'])
                 temp_df = pd.concat([temp_df, new_row], ignore_index=True)
 
@@ -276,7 +300,16 @@ if pin == ADMIN_PIN:
     # ВКЛАДКА 3: Сдвиг
     with tab3:
         with st.form("shift_form"):
-            sh_group = st.selectbox("Группа для сдвига", all_groups)
+            idx_3 = all_groups.index(st.session_state.admin_sync_group) if st.session_state.admin_sync_group in all_groups else 0
+
+            sh_group = st.selectbox(
+                "Группа для сдвига",
+                all_groups,
+                index=idx_3,
+                key="sync_tab3",
+                on_change=update_sync,
+                args=("sync_tab3",)
+            )
             sh_date = st.date_input("С какой даты начинаются каникулы?", format="DD.MM.YYYY")
             sh_weeks = st.number_input("Сдвиг в неделях (сколько недель каникул):", value=1, min_value=1, max_value=10)
 
@@ -317,8 +350,7 @@ if pin == ADMIN_PIN:
         colA, colB = st.columns(2)
         with colA:
             st.write("**Контакты преподавателей**")
-            edited_teachers = st.data_editor(teachers_df, num_rows="dynamic", use_container_width=True,
-                                             key="edit_teachers_table")
+            edited_teachers = st.data_editor(teachers_df, num_rows="dynamic", use_container_width=True, key="edit_teachers_table")
             if st.button("💾 Сохранить контакты", type="primary"):
                 conn.update(worksheet="Преподаватели", data=edited_teachers)
                 st.cache_data.clear()
@@ -334,8 +366,7 @@ if pin == ADMIN_PIN:
                 key="edit_mapping_table",
                 column_config={
                     "Группа": st.column_config.TextColumn("Группа", disabled=True),
-                    "Преподаватель": st.column_config.SelectboxColumn("Преподаватель",
-                                                                      options=[""] + teacher_names_list)
+                    "Преподаватель": st.column_config.SelectboxColumn("Преподаватель", options=[""] + teacher_names_list)
                 }
             )
             if st.button("🔗 Сохранить привязки", type="primary"):
@@ -359,8 +390,7 @@ if pin == ADMIN_PIN:
             with col1:
                 st.subheader("✉️ Шаг 1: Сгенерировать")
                 auto_teacher_match = mapping_df.loc[mapping_df['Группа'] == req_group, 'Преподаватель'].values
-                auto_teacher = auto_teacher_match[0] if len(auto_teacher_match) > 0 and pd.notna(
-                    auto_teacher_match[0]) else ""
+                auto_teacher = auto_teacher_match[0] if len(auto_teacher_match) > 0 and pd.notna(auto_teacher_match[0]) else ""
                 default_idx = teacher_names_list.index(auto_teacher) if auto_teacher in teacher_names_list else 0
 
                 if not teacher_names_list:
