@@ -61,6 +61,13 @@ if df.empty or 'Группа' not in df.columns:
 
 teachers_df = load_teachers()
 
+
+# --- ФУНКЦИЯ ОТМЕНЫ (UNDO) ---
+def create_undo_point(current_df):
+    """Сохраняет слепок расписания перед изменением"""
+    current_df.to_csv("undo_schedule.csv", index=False)
+
+
 # Техническая колонка для расчетов дат
 df['Дата_dt'] = pd.to_datetime(df['Дата'], format='%d.%m.%Y', errors='coerce')
 today = pd.to_datetime(date.today())
@@ -175,6 +182,17 @@ pin = st.text_input("Введите PIN-код:", type="password")
 
 if pin == ADMIN_PIN:
 
+    # --- КНОПКА ОТМЕНЫ (UNDO) ---
+    if os.path.exists("undo_schedule.csv"):
+        st.warning("Внимание: доступна отмена вашего последнего действия с расписанием.")
+        if st.button("↩️ Отменить последнее изменение (Вернуть расписание)", type="primary"):
+            backup_df = pd.read_csv("undo_schedule.csv", dtype=str).fillna("")
+            conn.update(worksheet="Расписание", data=backup_df)
+            st.cache_data.clear()
+            os.remove("undo_schedule.csv")
+            st.success("Предыдущее состояние расписания успешно восстановлено!")
+            st.rerun()
+
     # --- СИНХРОНИЗАЦИЯ ВЫБОРА ГРУППЫ МЕЖДУ ВКЛАДКАМИ ---
     if "admin_sync_group" not in st.session_state:
         st.session_state.admin_sync_group = "(Показать все)"
@@ -191,7 +209,7 @@ if pin == ADMIN_PIN:
     # ВКЛАДКА 1: Таблица
     with tab1:
         st.info(
-            "💡 Выберите группу для удобного редактирования. Удаление строки «Каникулы» автоматически сдвинет расписание обратно.")
+            "💡 Выберите группу. Если вы удалите строку (например, Каникулы или урок), расписание автоматически сожмется и подтянется наверх, не оставляя дыр в датах.")
 
         options_1 = ["(Показать все)"] + all_groups
         idx_1 = options_1.index(
@@ -222,40 +240,50 @@ if pin == ADMIN_PIN:
         )
 
         if st.button("💾 Сохранить изменения таблицы", type="primary"):
-            deleted_indices = set(display_df.index) - set(edited_df.index)
-            deleted_rows = display_df.loc[list(deleted_indices)]
-            holidays_deleted = deleted_rows[deleted_rows['Название модуля'].str.strip().str.lower() == 'каникулы']
+            # Возвращаем даты в строковый формат для надежной обработки
+            edited_df['Дата'] = pd.to_datetime(edited_df['Дата']).dt.strftime('%d.%m.%Y')
+            display_df['Дата'] = pd.to_datetime(display_df['Дата']).dt.strftime('%d.%m.%Y')
 
+            deleted_indices = set(display_df.index) - set(edited_df.index)
+
+            # ЭФФЕКТ "СЖАТИЯ": если что-то удалили, подтягиваем даты вверх
+            if deleted_indices:
+                edited_df['tmp_dt'] = pd.to_datetime(edited_df['Дата'], format='%d.%m.%Y', errors='coerce')
+                display_df['tmp_dt'] = pd.to_datetime(display_df['Дата'], format='%d.%m.%Y', errors='coerce')
+
+                repaired_groups = []
+                for grp in edited_df['Группа'].unique():
+                    grp_edited = edited_df[edited_df['Группа'] == grp].sort_values('tmp_dt')
+                    grp_orig = display_df[display_df['Группа'] == grp].sort_values('tmp_dt')
+
+                    orig_dates = grp_orig['Дата'].tolist()
+                    curr_dates = grp_edited['Дата'].tolist()
+
+                    # Накладываем старую сетку дат на оставшиеся уроки
+                    for i in range(min(len(orig_dates), len(curr_dates))):
+                        curr_dates[i] = orig_dates[i]
+
+                    grp_edited['Дата'] = curr_dates
+                    repaired_groups.append(grp_edited)
+
+                edited_df = pd.concat(repaired_groups).drop(columns=['tmp_dt'])
+
+            # Собираем всё обратно
             if edit_group_filter != "(Показать все)":
                 untouched_df = edit_df[edit_df['Группа'] != edit_group_filter]
+                untouched_df['Дата'] = pd.to_datetime(untouched_df['Дата']).dt.strftime('%d.%m.%Y')
                 final_df = pd.concat([untouched_df, edited_df])
             else:
                 final_df = edited_df.copy()
-
-            final_df['tmp_dt'] = pd.to_datetime(final_df['Дата'], errors='coerce')
-
-            if not holidays_deleted.empty:
-                holidays_deleted['tmp_dt'] = pd.to_datetime(holidays_deleted['Дата'], errors='coerce')
-                holidays_deleted = holidays_deleted.sort_values(by='tmp_dt', ascending=False)
-
-                for _, hol in holidays_deleted.iterrows():
-                    g = hol['Группа']
-                    d = hol['tmp_dt']
-
-                    if pd.notnull(d):
-                        mask = (final_df['Группа'] == g) & (final_df['tmp_dt'] > d)
-                        final_df.loc[mask, 'tmp_dt'] -= pd.Timedelta(weeks=1)
-
-            final_df['Дата'] = final_df['tmp_dt'].dt.strftime('%d.%m.%Y').fillna("")
-            final_df = final_df.drop(columns=['tmp_dt'])
 
             final_df['sort_dt'] = pd.to_datetime(final_df['Дата'], format='%d.%m.%Y', errors='coerce')
             final_df = final_df.sort_values(by=['Группа', 'sort_dt']).drop(columns=['sort_dt'])
             final_df = final_df.reset_index(drop=True)
 
+            create_undo_point(df)  # Создаем бэкап перед отправкой!
             conn.update(worksheet="Расписание", data=final_df)
             st.cache_data.clear()
-            st.success("Сохранено в Google Таблицу! Если удалялись каникулы, применены обратные сдвиги.")
+            st.success("Сохранено! Расписание автоматически сжалось на месте удаленных уроков.")
             st.rerun()
 
     # ВКЛАДКА 2: Вставка занятия
@@ -300,6 +328,8 @@ if pin == ADMIN_PIN:
                 temp_df = temp_df.sort_values(by=['Группа', 'tmp_dt'])
 
                 final_df = temp_df.drop(columns=['tmp_dt'])
+
+                create_undo_point(df)  # Создаем бэкап
                 conn.update(worksheet="Расписание", data=final_df)
                 st.cache_data.clear()
                 st.success("Добавлено в Google Таблицу!")
@@ -350,6 +380,8 @@ if pin == ADMIN_PIN:
                 temp_df = temp_df.sort_values(by=['Группа', 'tmp_dt'])
 
                 final_df = temp_df.drop(columns=['tmp_dt'])
+
+                create_undo_point(df)  # Создаем бэкап
                 conn.update(worksheet="Расписание", data=final_df)
                 st.cache_data.clear()
                 st.success("Строки «Каникулы» добавлены, а расписание успешно сдвинуто!")
@@ -435,6 +467,8 @@ if pin == ADMIN_PIN:
                         df.loc[mask, 'Запрос_отправлен'] = 'Да'
 
                         final_df = df.drop(columns=['Дата_dt'])
+
+                        create_undo_point(df)  # Создаем бэкап
                         conn.update(worksheet="Расписание", data=final_df)
                         st.cache_data.clear()
                         st.success("Модуль скрыт!")
