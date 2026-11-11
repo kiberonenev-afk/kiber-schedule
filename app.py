@@ -181,27 +181,38 @@ if pin == ADMIN_PIN:
     # ВКЛАДКА 1: Таблица
     with tab1:
         st.info(
-            "💡 Если вы удалите строку «Каникулы» (выделите слева и нажмите Delete), все последующие занятия этой группы автоматически сдвинутся обратно на неделю назад.")
+            "💡 Выберите группу для удобного редактирования. Удаление строки «Каникулы» автоматически сдвинет расписание обратно.")
+
+        edit_group_filter = st.selectbox("Фильтр по группе:", ["(Показать все)"] + all_groups, key="edit_group_filter")
+
         edit_df = df.drop(columns=['Дата_dt']).copy()
         edit_df['Дата'] = pd.to_datetime(edit_df['Дата'], format='%d.%m.%Y', errors='coerce').dt.date
 
+        if edit_group_filter != "(Показать все)":
+            display_df = edit_df[edit_df['Группа'] == edit_group_filter]
+        else:
+            display_df = edit_df
+
         edited_df = st.data_editor(
-            edit_df,
+            display_df,
             num_rows="dynamic",
             use_container_width=True,
             column_config={"Дата": st.column_config.DateColumn("Дата", format="DD.MM.YYYY", required=True)}
         )
+
         if st.button("💾 Сохранить изменения таблицы", type="primary"):
-            # 1. Ищем удаленные строки
-            deleted_indices = set(edit_df.index) - set(edited_df.index)
-            deleted_rows = edit_df.loc[list(deleted_indices)]
+            deleted_indices = set(display_df.index) - set(edited_df.index)
+            deleted_rows = display_df.loc[list(deleted_indices)]
             holidays_deleted = deleted_rows[deleted_rows['Название модуля'].str.strip().str.lower() == 'каникулы']
 
-            # 2. Подготавливаем финальный датафрейм
-            final_df = edited_df.copy()
+            if edit_group_filter != "(Показать все)":
+                untouched_df = edit_df[edit_df['Группа'] != edit_group_filter]
+                final_df = pd.concat([untouched_df, edited_df])
+            else:
+                final_df = edited_df.copy()
+
             final_df['tmp_dt'] = pd.to_datetime(final_df['Дата'], errors='coerce')
 
-            # 3. Применяем автоматический обратный сдвиг
             if not holidays_deleted.empty:
                 holidays_deleted['tmp_dt'] = pd.to_datetime(holidays_deleted['Дата'], errors='coerce')
                 holidays_deleted = holidays_deleted.sort_values(by='tmp_dt', ascending=False)
@@ -214,9 +225,12 @@ if pin == ADMIN_PIN:
                         mask = (final_df['Группа'] == g) & (final_df['tmp_dt'] > d)
                         final_df.loc[mask, 'tmp_dt'] -= pd.Timedelta(weeks=1)
 
-            # 4. Финализируем и сохраняем
             final_df['Дата'] = final_df['tmp_dt'].dt.strftime('%d.%m.%Y').fillna("")
             final_df = final_df.drop(columns=['tmp_dt'])
+
+            final_df['sort_dt'] = pd.to_datetime(final_df['Дата'], format='%d.%m.%Y', errors='coerce')
+            final_df = final_df.sort_values(by=['Группа', 'sort_dt']).drop(columns=['sort_dt'])
+            final_df = final_df.reset_index(drop=True)
 
             conn.update(worksheet="Расписание", data=final_df)
             st.cache_data.clear()
@@ -272,11 +286,9 @@ if pin == ADMIN_PIN:
                 target_dt = pd.to_datetime(sh_date.strftime('%d.%m.%Y'), format='%d.%m.%Y')
 
                 if sh_weeks > 0:
-                    # 1. Сдвигаем все будущие уроки вперед
                     mask = (temp_df['Группа'] == sh_group) & (temp_df['tmp_dt'] >= target_dt)
                     temp_df.loc[mask, 'tmp_dt'] += pd.Timedelta(weeks=sh_weeks)
 
-                    # 2. Создаем строки-заглушки для каникул на освободившиеся даты
                     hol_rows = []
                     for i in range(int(sh_weeks)):
                         hol_dt = target_dt + pd.Timedelta(weeks=i)
@@ -289,7 +301,6 @@ if pin == ADMIN_PIN:
                             'tmp_dt': hol_dt
                         })
 
-                    # 3. Вклеиваем каникулы в расписание
                     temp_df = pd.concat([temp_df, pd.DataFrame(hol_rows)], ignore_index=True)
 
                 temp_df['Дата'] = temp_df['tmp_dt'].dt.strftime('%d.%m.%Y')
@@ -355,4 +366,54 @@ if pin == ADMIN_PIN:
                 if not teacher_names_list:
                     st.error("Добавьте преподавателей во вкладке 'База и привязки'.")
                 else:
-                    req
+                    req_teacher = st.selectbox("Уточнить преподавателя:", teacher_names_list, index=default_idx)
+
+                    if st.button("Сгенерировать текст", type="primary", use_container_width=True):
+                        t_info = teachers_df[teachers_df['ФИО'] == req_teacher].iloc[0]
+                        mod_dates_df = df[(df['Группа'] == req_group) & (df['Название модуля'] == req_mod)].copy()
+                        mod_dates_df = mod_dates_df.sort_values(by='Дата_dt')
+
+                        dates_str = f"с {mod_dates_df['Дата'].iloc[0]} по {mod_dates_df['Дата'].iloc[-1]}" if not mod_dates_df.empty else "даты не найдены"
+
+                        final_message = (
+                            f"Добрый день!\nПрошу открыть модуль: \"{req_mod}\"\nмоему преподавателю:\n"
+                            f"{t_info['ФИО']} / {t_info['Телефон']} / {t_info['Email']}.\nДата работы по модулю: {dates_str}."
+                        )
+                        st.success("Готово! Копируйте:")
+                        st.code(final_message, language="text")
+
+            with col2:
+                st.subheader("✅ Шаг 2: Скрыть")
+                confirm_hide = st.checkbox(f"Подтверждаю скрытие модуля «{req_mod}»")
+
+                if st.button("🚫 Скрыть из уведомлений", use_container_width=True):
+                    if confirm_hide:
+                        mask = (df['Группа'] == req_group) & (df['Название модуля'] == req_mod) & (df['Урок'] == '1')
+                        df.loc[mask, 'Запрос_отправлен'] = 'Да'
+
+                        final_df = df.drop(columns=['Дата_dt'])
+                        conn.update(worksheet="Расписание", data=final_df)
+                        st.cache_data.clear()
+                        st.success("Модуль скрыт!")
+                        st.rerun()
+                    else:
+                        st.error("Поставьте галочку подтверждения!")
+
+    # ВКЛАДКА 6: Смена пароля
+    with tab6:
+        st.subheader("🔑 Настройка PIN-кода администратора")
+        st.info("Новый пароль сохранится во внутреннем файле (он не сбрасывается при перезапуске сервера).")
+
+        with st.form("change_pass_form"):
+            new_pass1 = st.text_input("Новый PIN-код", type="password")
+            new_pass2 = st.text_input("Повторите новый PIN-код", type="password")
+            submit_pass = st.form_submit_button("Сохранить новый пароль")
+
+            if submit_pass:
+                if not new_pass1:
+                    st.error("Пароль не может быть пустым!")
+                elif new_pass1 != new_pass2:
+                    st.error("Пароли не совпадают!")
+                else:
+                    save_admin_password(new_pass1)
+                    st.success("Пароль успешно изменен! Используйте его при следующем входе.")
