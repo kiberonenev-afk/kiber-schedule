@@ -422,63 +422,250 @@ if pin == ADMIN_PIN:
                 st.success("Привязки успешно сохранены!")
                 st.rerun()
 
+    
     # ВКЛАДКА 5: Запрос доступов
     with tab5:
-        if not alerts_all:
-            st.success("🎉 Нет горящих модулей! Запрашивать и скрывать нечего.")
+
+        st.info(
+            "Здесь можно сформировать запрос на открытие любого модуля "
+            "из расписания, независимо от даты его начала."
+        )
+
+        # Получаем все первые уроки модулей, а не только те,
+        # которые попали в автоматические напоминания
+        lesson_numbers = pd.to_numeric(
+            df['Урок'].astype(str).str.strip(),
+            errors='coerce'
+        )
+
+        module_starts = df[
+            (lesson_numbers == 1) &
+            (df['Дата_dt'].notna())
+        ].copy()
+
+        module_starts = module_starts.sort_values(
+            by=['Дата_dt', 'Группа']
+        )
+
+        if module_starts.empty:
+            st.warning("В расписании не найдено ни одного начала модуля.")
+
         else:
-            alert_options = [f"{a['group']} — {a['module']}" for a in alerts_all]
-            req_combined = st.selectbox("🎯 Выберите горящий модуль из списка:", alert_options)
-            req_group, req_mod = req_combined.split(" — ", 1)
+            # Создаём список выбора с указанием группы и даты
+            module_choices = {}
+
+            for _, row in module_starts.iterrows():
+
+                req_group = row['Группа']
+                req_mod = row['Название модуля']
+                req_date = row['Дата_dt']
+
+                status = str(
+                    row.get('Запрос_отправлен', '')
+                ).strip().casefold()
+
+                status_text = (
+                    " | запрос уже отмечен"
+                    if status == 'да'
+                    else ""
+                )
+
+                label = (
+                    f"{req_group} — {req_mod} — "
+                    f"{req_date.strftime('%d.%m.%Y')}"
+                    f"{status_text}"
+                )
+
+                module_choices[label] = (
+                    req_group,
+                    req_mod,
+                    req_date
+                )
+
+            st.subheader("🎯 Выбор модуля")
+
+            selected_module = st.selectbox(
+                "Выберите любой модуль из расписания:",
+                list(module_choices.keys())
+            )
+
+            req_group, req_mod, req_start_date = (
+                module_choices[selected_module]
+            )
+
+            st.write(f"**Группа:** {req_group}")
+            st.write(f"**Модуль:** {req_mod}")
+            st.write(
+                f"**Начало:** {req_start_date.strftime('%d.%m.%Y')}"
+            )
+
+            # Находим дату следующего модуля в этой группе,
+            # чтобы не захватить его занятия в запрос
+            other_starts = module_starts[
+                (module_starts['Группа'] == req_group) &
+                (module_starts['Дата_dt'] > req_start_date)
+            ]
+
+            next_start_date = (
+                other_starts['Дата_dt'].min()
+                if not other_starts.empty
+                else pd.Timestamp.max
+            )
+
+            mod_dates_df = df[
+                (df['Группа'] == req_group) &
+                (df['Название модуля'] == req_mod) &
+                (df['Дата_dt'] >= req_start_date) &
+                (df['Дата_dt'] < next_start_date)
+            ].copy()
+
+            mod_dates_df = mod_dates_df.sort_values(
+                by='Дата_dt'
+            )
 
             st.divider()
+
             col1, col2 = st.columns(2)
 
+            # ШАГ 1: ГЕНЕРАЦИЯ ЗАПРОСА
             with col1:
-                st.subheader("✉️ Шаг 1: Сгенерировать")
-                auto_teacher_match = mapping_df.loc[mapping_df['Группа'] == req_group, 'Преподаватель'].values
-                auto_teacher = auto_teacher_match[0] if len(auto_teacher_match) > 0 and pd.notna(
-                    auto_teacher_match[0]) else ""
-                default_idx = teacher_names_list.index(auto_teacher) if auto_teacher in teacher_names_list else 0
+
+                st.subheader("✉️ Шаг 1: Сгенерировать запрос")
+
+                auto_teacher_match = mapping_df.loc[
+                    mapping_df['Группа'] == req_group,
+                    'Преподаватель'
+                ].values
+
+                auto_teacher = (
+                    auto_teacher_match[0]
+                    if len(auto_teacher_match) > 0
+                    and pd.notna(auto_teacher_match[0])
+                    else ""
+                )
+
+                default_idx = (
+                    teacher_names_list.index(auto_teacher)
+                    if auto_teacher in teacher_names_list
+                    else 0
+                )
 
                 if not teacher_names_list:
-                    st.error("Добавьте преподавателей во вкладке 'База и привязки'.")
+                    st.error(
+                        "Добавьте преподавателей во вкладке "
+                        "'База и привязки'."
+                    )
+
                 else:
-                    req_teacher = st.selectbox("Уточнить преподавателя:", teacher_names_list, index=default_idx)
+                    req_teacher = st.selectbox(
+                        "Преподаватель:",
+                        teacher_names_list,
+                        index=default_idx
+                    )
 
-                    if st.button("Сгенерировать текст", type="primary", use_container_width=True):
-                        t_info = teachers_df[teachers_df['ФИО'] == req_teacher].iloc[0]
-                        mod_dates_df = df[(df['Группа'] == req_group) & (df['Название модуля'] == req_mod)].copy()
-                        mod_dates_df = mod_dates_df.sort_values(by='Дата_dt')
+                    if st.button(
+                        "Сгенерировать текст запроса",
+                        type="primary",
+                        use_container_width=True
+                    ):
 
-                        dates_str = f"с {mod_dates_df['Дата'].iloc[0]} по {mod_dates_df['Дата'].iloc[-1]}" if not mod_dates_df.empty else "даты не найдены"
+                        t_info = teachers_df[
+                            teachers_df['ФИО'] == req_teacher
+                        ].iloc[0]
+
+                        if not mod_dates_df.empty:
+
+                            dates_str = (
+                                f"с {mod_dates_df['Дата'].iloc[0]} "
+                                f"по {mod_dates_df['Дата'].iloc[-1]}"
+                            )
+
+                        else:
+                            dates_str = "даты не найдены"
 
                         final_message = (
-                            f"Добрый день!\nПрошу открыть модуль: \"{req_mod}\"\nмоему преподавателю:\n"
-                            f"{t_info['ФИО']} / {t_info['Телефон']} / {t_info['Email']}.\nДата работы по модулю: {dates_str}."
+                            f"Добрый день!\n"
+                            f"Прошу открыть модуль: \"{req_mod}\"\n"
+                            f"моему преподавателю:\n"
+                            f"{t_info['ФИО']} / "
+                            f"{t_info['Телефон']} / "
+                            f"{t_info['Email']}.\n"
+                            f"Дата работы по модулю: {dates_str}."
                         )
-                        st.success("Готово! Копируйте:")
+
+                        st.success("Готово! Скопируйте запрос:")
                         st.code(final_message, language="text")
 
+            # ШАГ 2: СКРЫТИЕ ИЗ НАПОМИНАНИЙ
             with col2:
-                st.subheader("✅ Шаг 2: Скрыть")
-                confirm_hide = st.checkbox(f"Подтверждаю скрытие модуля «{req_mod}»")
 
-                if st.button("🚫 Скрыть из уведомлений", use_container_width=True):
-                    if confirm_hide:
-                        mask = (df['Группа'] == req_group) & (df['Название модуля'] == req_mod) & (df['Урок'] == '1')
-                        df.loc[mask, 'Запрос_отправлен'] = 'Да'
+                st.subheader("✅ Шаг 2: Скрыть из напоминаний")
 
-                        final_df = df.drop(columns=['Дата_dt'])
+                current_status = str(
+                    df.loc[
+                        (df['Группа'] == req_group) &
+                        (df['Название модуля'] == req_mod) &
+                        (lesson_numbers == 1) &
+                        (df['Дата_dt'] == req_start_date),
+                        'Запрос_отправлен'
+                    ].iloc[0]
+                ).strip().casefold()
 
-                        create_undo_point(df)  # Создаем бэкап
-                        conn.update(worksheet="Расписание", data=final_df)
-                        st.cache_data.clear()
-                        st.success("Модуль скрыт!")
-                        st.rerun()
-                    else:
-                        st.error("Поставьте галочку подтверждения!")
+                if current_status == 'да':
 
+                    st.info(
+                        "Для этого модуля уже отмечена отправка запроса."
+                    )
+
+                else:
+
+                    confirm_hide = st.checkbox(
+                        f"Подтверждаю отправку запроса "
+                        f"и скрытие модуля «{req_mod}»"
+                    )
+
+                    if st.button(
+                        "🚫 Скрыть из уведомлений",
+                        use_container_width=True
+                    ):
+
+                        if confirm_hide:
+
+                            mask = (
+                                (df['Группа'] == req_group) &
+                                (df['Название модуля'] == req_mod) &
+                                (lesson_numbers == 1) &
+                                (df['Дата_dt'] == req_start_date)
+                            )
+
+                            df.loc[
+                                mask,
+                                'Запрос_отправлен'
+                            ] = 'Да'
+
+                            final_df = df.drop(
+                                columns=['Дата_dt']
+                            )
+
+                            create_undo_point(df)
+
+                            conn.update(
+                                worksheet="Расписание",
+                                data=final_df
+                            )
+
+                            st.cache_data.clear()
+
+                            st.success(
+                                "Модуль исключён из автоматических напоминаний!"
+                            )
+
+                            st.rerun()
+
+                        else:
+                            st.error(
+                                "Поставьте галочку подтверждения!"
+                            )
     # ВКЛАДКА 6: Смена пароля
     with tab6:
         st.subheader("🔑 Настройка PIN-кода администратора")
