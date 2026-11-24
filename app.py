@@ -452,11 +452,35 @@ if pin == ADMIN_PIN:
 
         else:
             # Создаём список выбора с указанием группы и даты
+
+            # ШАГ 1. ВЫБОР ГРУППЫ
+
+            st.subheader("🎯 Выбор группы и модуля")
+
+            group_options = sorted(
+                module_starts['Группа'].dropna().unique().tolist()
+            )
+
+            selected_req_group = st.selectbox(
+                "1. Выберите группу:",
+                group_options,
+                key="request_group_filter"
+            )
+
+            # ШАГ 2. ФИЛЬТРАЦИЯ МОДУЛЕЙ ПО ВЫБРАННОЙ ГРУППЕ
+
+            group_modules = module_starts[
+                module_starts['Группа'] == selected_req_group
+            ].copy()
+
+            group_modules = group_modules.sort_values(
+                by='Дата_dt'
+            )
+
             module_choices = {}
 
-            for _, row in module_starts.iterrows():
+            for _, row in group_modules.iterrows():
 
-                req_group = row['Группа']
                 req_mod = row['Название модуля']
                 req_date = row['Дата_dt']
 
@@ -471,27 +495,36 @@ if pin == ADMIN_PIN:
                 )
 
                 label = (
-                    f"{req_group} — {req_mod} — "
+                    f"{req_mod} — "
                     f"{req_date.strftime('%d.%m.%Y')}"
                     f"{status_text}"
                 )
 
                 module_choices[label] = (
-                    req_group,
                     req_mod,
                     req_date
                 )
 
-            st.subheader("🎯 Выбор модуля")
+            # ШАГ 3. ВЫБОР КОНКРЕТНОГО МОДУЛЯ
 
             selected_module = st.selectbox(
-                "Выберите любой модуль из расписания:",
-                list(module_choices.keys())
+                "2. Выберите модуль:",
+                list(module_choices.keys()),
+                key="request_module_filter"
             )
 
-            req_group, req_mod, req_start_date = (
+            req_mod, req_start_date = (
                 module_choices[selected_module]
             )
+
+            req_group = selected_req_group
+
+            st.write(f"**Группа:** {req_group}")
+            st.write(f"**Модуль:** {req_mod}")
+            st.write(
+                f"**Начало:** {req_start_date.strftime('%d.%m.%Y')}"
+            )
+
 
             st.write(f"**Группа:** {req_group}")
             st.write(f"**Модуль:** {req_mod}")
