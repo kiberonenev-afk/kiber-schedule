@@ -39,7 +39,7 @@ def clean_df(df):
 
 
 def load_schedule():
-    df = conn.read(worksheet="Расписание", ttl=0)
+    df = conn.read(worksheet="Расписание", ttl=60)
     df = clean_df(df)
     if 'Запрос_отправлен' not in df.columns:
         df['Запрос_отправлен'] = ""
@@ -48,7 +48,7 @@ def load_schedule():
 
 def load_teachers():
     try:
-        df = conn.read(worksheet="Преподаватели", ttl=0)
+        df = conn.read(worksheet="Преподаватели", ttl=60)
         return clean_df(df)
     except Exception:
         return pd.DataFrame(columns=["ФИО", "Телефон", "Email"])
@@ -78,7 +78,7 @@ teacher_names_list = [name for name in teachers_df['ФИО'].tolist() if name.st
 # --- НАДЕЖНАЯ СИНХРОНИЗАЦИЯ ПРИВЯЗОК ---
 def load_and_sync_mapping(current_groups):
     try:
-        map_df = conn.read(worksheet="Привязка", ttl=0)
+        map_df = conn.read(worksheet="Привязка", ttl=60)
         map_df = clean_df(map_df)
     except Exception:
         map_df = pd.DataFrame(columns=["Группа", "Преподаватель"])
