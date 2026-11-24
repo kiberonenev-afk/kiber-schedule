@@ -106,7 +106,10 @@ def load_and_sync_mapping(current_groups):
 mapping_df = load_and_sync_mapping(all_groups)
 
 # --- ГЛОБАЛЬНАЯ ПАНЕЛЬ НАПОМИНАНИЙ ---
-new_modules_all = df[(df['Урок'] == '1') & (df['Запрос_отправлен'] != 'Да')]
+new_modules_all = df[
+    (pd.to_numeric(df['Урок'], errors='coerce') == 1) &
+    (df['Запрос_отправлен'].astype(str).str.strip().str.casefold() != 'да')
+].copy()
 alerts_all = []
 
 for index, row in new_modules_all.iterrows():
